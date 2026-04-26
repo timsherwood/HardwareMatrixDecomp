@@ -27,3 +27,8 @@ outputs/
 checkpoints/
 *.pt
 *.onnx
+
+# Generated data (large / regenerable)
+data/MNIST/
+data/*.csv
+data/*.pt
