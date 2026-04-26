@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package hardware_matrix_decomp;
+
+// Serialized tensor: row-major flat values + shape.
+message TensorData {
+  repeated float values = 1;
+  repeated int32 shape = 2;
+}
+
+// Sent from the simulator into a TileGrid.
+message TileRequest {
+  TensorData activation = 1;
+  string tile_id = 2;
+  int32 sequence_id = 3;
+}
+
+// Returned from a TileGrid to the next stage.
+message TileResponse {
+  TensorData output = 1;
+  string tile_id = 2;
+  int32 sequence_id = 3;
+}

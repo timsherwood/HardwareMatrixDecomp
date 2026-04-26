@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
     "torch>=2.2",
+    "protobuf>=4.25",
 ]
 
 [project.optional-dependencies]
@@ -14,14 +15,19 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "grpcio-tools>=1.60",
 ]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["src/hardware_matrix_decomp/proto/tile_pb2.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
+# N803/N806: uppercase matrix names (W, A, B, U, Vt) are standard linear-algebra notation.
+# TC001/TC002: keeping runtime numpy/internal imports outside TYPE_CHECKING for clarity.
+ignore = ["N803", "N806", "TC001", "TC002"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -32,6 +38,12 @@ warn_unused_configs = true
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.80.0",
+    "pytest>=9.0.3",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hardware_matrix_decomp"]
