@@ -30,6 +30,8 @@ checkpoints/
 
 # Generated data (large / regenerable)
 data/MNIST/
+data/FashionMNIST/
+data/CIFAR10/
 data/*.csv
 data/*.pt
 
