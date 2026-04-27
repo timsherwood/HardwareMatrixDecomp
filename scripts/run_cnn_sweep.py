@@ -48,10 +48,10 @@ def load_test_data(n: int, data_dir: Path = Path("data")) -> tuple[np.ndarray, n
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,)),
+            transforms.Normalize((0.2860,), (0.3530,)),
         ]
     )
-    test_ds = datasets.MNIST(str(data_dir), train=False, download=True, transform=transform)
+    test_ds = datasets.FashionMNIST(str(data_dir), train=False, download=True, transform=transform)
     loader = DataLoader(test_ds, batch_size=n, shuffle=False)
     x, y = next(iter(loader))
     # Keep as 4-D (N, C, H, W) for CNN — do NOT flatten
@@ -108,7 +108,7 @@ def sweep_cnn(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank × noise sweep on trained CNN")
-    parser.add_argument("--model", type=Path, default=Path("data/cnn_mnist.pt"))
+    parser.add_argument("--model", type=Path, default=Path("data/cnn_fmnist.pt"))
     parser.add_argument("--output", type=Path, default=Path("data/cnn_results.csv"))
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--n-test", type=int, default=500)

@@ -1,4 +1,9 @@
-"""Train a small CNN on MNIST and save weights for downstream CNN sweep experiments.
+"""Train a small CNN on Fashion-MNIST and save weights for downstream sweep experiments.
+
+Fashion-MNIST: 10 clothing categories (T-shirt, trouser, pullover, dress, coat,
+sandal, shirt, sneaker, bag, ankle boot). Same 28×28 grayscale format as MNIST
+but significantly harder (~90% vs ~99% accuracy), making it a more meaningful
+benchmark for noise sensitivity analysis.
 
 Network:
   Conv2d(1,16,3,p=1) → ReLU → MaxPool2d(2)   → (16, 14, 14)
@@ -12,7 +17,7 @@ All conv weight matrices stay well below the 100×100 tile limit:
 
 Usage:
     uv run python scripts/train_cnn.py
-    uv run python scripts/train_cnn.py --epochs 10 --output data/cnn_mnist.pt
+    uv run python scripts/train_cnn.py --epochs 15 --output data/cnn_fmnist.pt
 """
 
 from __future__ import annotations
@@ -64,11 +69,11 @@ def train(
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,)),
+            transforms.Normalize((0.2860,), (0.3530,)),
         ]
     )
-    train_ds = datasets.MNIST(str(data_dir), train=True, download=True, transform=transform)
-    test_ds = datasets.MNIST(str(data_dir), train=False, download=True, transform=transform)
+    train_ds = datasets.FashionMNIST(str(data_dir), train=True, download=True, transform=transform)
+    test_ds = datasets.FashionMNIST(str(data_dir), train=False, download=True, transform=transform)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=256, shuffle=False)
 
@@ -101,7 +106,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--output", type=Path, default=Path("data/cnn_mnist.pt"))
+    parser.add_argument("--output", type=Path, default=Path("data/cnn_fmnist.pt"))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
