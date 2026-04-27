@@ -9,12 +9,12 @@ import torch.nn as nn
 
 from .decomp import SVDDecomposition
 from .error_model import GaussianErrorModel
-from .network import DecomposedMLP
+from .network import DecomposedNetwork
 from .simulator import run_simulation
 
 
 def forward_with_taps(
-    net: DecomposedMLP,
+    net: DecomposedNetwork,
     x: np.ndarray,
     rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, list[np.ndarray]]:
@@ -31,8 +31,8 @@ def forward_with_taps(
 
 
 def per_layer_relative_error(
-    clean_net: DecomposedMLP,
-    noisy_net: DecomposedMLP,
+    clean_net: DecomposedNetwork,
+    noisy_net: DecomposedNetwork,
     x: np.ndarray,
     n_samples: int = 20,
     seed: int = 0,

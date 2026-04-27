@@ -33,4 +33,5 @@ class HardwareTile:
     def forward(self, x: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
         """Compute x @ W, with noise applied to W when an error model is set."""
         w = self.error_model.apply(self.weights, rng) if self.error_model else self.weights
-        return x @ w
+        result: np.ndarray = x @ w
+        return result

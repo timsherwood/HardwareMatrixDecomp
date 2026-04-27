@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from .decomp import SVDDecomposition
 from .error_model import GaussianErrorModel
-from .network import DecomposedMLP
+from .network import DecomposedNetwork
 
 
 @dataclass
@@ -51,7 +51,7 @@ def run_simulation(
 
     rng = np.random.default_rng(seed)
 
-    baseline_net = DecomposedMLP.from_pytorch_sequential(model, decomp=decomp, error_model=None)
+    baseline_net = DecomposedNetwork.from_pytorch_sequential(model, decomp=decomp, error_model=None)
     baseline_logits = baseline_net.forward(x)
     baseline_preds = np.argmax(baseline_logits, axis=1)
     baseline_acc = float(np.mean(baseline_preds == y_true))
@@ -59,7 +59,7 @@ def run_simulation(
     if error_model is None:
         noisy_acc = baseline_acc
     else:
-        noisy_net = DecomposedMLP.from_pytorch_sequential(
+        noisy_net = DecomposedNetwork.from_pytorch_sequential(
             model, decomp=decomp, error_model=error_model
         )
         noisy_logits = noisy_net.forward(x, rng=rng)
