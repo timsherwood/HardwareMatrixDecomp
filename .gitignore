@@ -32,3 +32,6 @@ checkpoints/
 data/MNIST/
 data/*.csv
 data/*.pt
+
+# Local Claude Code settings (contains secrets)
+.claude/settings.local.json
