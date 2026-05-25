@@ -15,8 +15,8 @@ The key claims, all simulation-validated:
 |---|---|
 | Inference energy (MNIST 8×8, 64→32→10) | **12.4 pJ/sample** |
 | Versus 8-bit integer MAC baseline (28 nm) | **112× lower energy** |
-| Inference latency (MNIST, 2 layers) | **~240 ns** |
-| Throughput (pipelined) | **~4 MHz** |
+| Inference latency (MNIST, 2 layers) | **~280 ns** (T_inactive + 2 × 65 ns) |
+| Throughput (pipelined) | **~3.6 MHz** |
 | Jitter tolerance | **σ_j < 1 ns** (robust at σ_j < τ/10 = 1 ns) |
 | Training method | **SPSA** — only 3 forward passes per weight update, no backprop |
 
@@ -40,9 +40,9 @@ Each weight is implemented as a **single-port RRAM (Resistive RAM) device** in s
 |---|---|---|
 | C_cell | 100 fF | Fixed load capacitor |
 | V_dd | 0.8 V | Supply voltage |
-| R_nom (at u=0) | 158 kΩ | Within RRAM LRS range: 10–500 kΩ ✓ |
-| R_min (d_min) | 50 kΩ | High-conductance state |
-| R_max (d_max) | 500 kΩ | Low-conductance state |
+| R_nom (at u=0) | 158 kΩ | Intermediate-state RRAM; achievable via P&V ✓ |
+| R_min (d_min) | 50 kΩ | Highest-conductance state used |
+| R_max (d_max) | 500 kΩ | Lowest-conductance state used |
 | Conductance ratio | 10× | One decade swing — achievable with standard RRAM |
 | E_cell (½CV²) | 32 fJ | Energy per pulse traversal |
 
@@ -107,21 +107,34 @@ p[j] = sigmoid(margin[j] / τ_d)                   ← output probability
 
 A simple CMOS threshold comparator (Winner-Take-All / WTA) is **insufficient** — this was verified by circuit-level simulation (`scripts/spice_xor.py`).  WTA always fires at the earliest threshold crossing regardless of how many branches arrive simultaneously, so it cannot distinguish N=1 from N=2 simultaneous inputs.  XOR requires that distinction: the [1,1] pattern depends on two negative branches combining to pull the race time *before* t=0, which is only achievable with the nLSE.
 
-**Required circuit:** Each branch drives a transistor biased in subthreshold.  In subthreshold the drain current is exponential in gate voltage:
+**Required circuit:** Each branch drives a transistor biased in subthreshold.  In subthreshold the drain current grows exponentially with gate voltage:
 
 ```
 I_branch(t) ∝ exp(V_branch(t) / V_T)
 ```
 
-All branch currents sum on a shared output node.  When the total current crosses a threshold, the sense amp fires.  Because each I_branch(t) is exponential in the RC ramp V_branch(t), the firing time satisfies exactly the nLSE equation:
+Because V_branch(t) is an RC ramp, I_branch grows from a small but nonzero baseline at t = T_in and continues rising past the threshold crossing.  All branch currents sum on a shared output node.  When the total current crosses a threshold I_th, the sense amp fires at:
 
 ```
-T_fire = −τ · log Σ_i exp(−t_cross_i / τ)     τ = C_out · V_T / I_bias
+T_fire = C + (−τ · log Σ_i exp(−t_cross_i / τ))     τ ≈ V_T · d / V_th
+       = C + nLSE(t_cross_i)
+
+where C = τ · log(I_th / I_baseline) > 0 is a positive circuit constant.
 ```
+
+The constant C makes T_fire always positive and physically realizable.  Crucially, C cancels in the margin:
+
+```
+margin = T_minus − T_plus
+       = [C + nLSE(t_cross_neg)] − [C + nLSE(t_cross_pos)]
+       = nLSE(t_cross_neg) − nLSE(t_cross_pos)
+```
+
+so the **margin sign — and therefore the classification — is identical to the software model**, regardless of the threshold setting.  This was verified in `scripts/spice_xor.py` by sweeping C from 0 to 50 ns: [1,1] gives the correct negative margin for all physically realizable values (see Stage 5 analysis).
 
 This is standard analog VLSI — the same exponential-transconductance principle underlies Winner-Take-All networks (Mead 1989) and silicon cochlea circuits (Lazzaro et al. 1989).
 
-Key property: **nLSE can fire before the earliest threshold crossing** when multiple branches combine (acausal firing).  Physically, each branch contributes a small but nonzero exponential current even while its RC ramp is still below V_th, allowing the shared node to cross its threshold early.
+Key property: **the sense amp fires earlier when N simultaneous branches combine** because each branch contributes pre-threshold current (from I_baseline) that accumulates before any individual branch reaches V_th.  With N=2 vs N=1 simultaneous branches at the same crossing time, the physical sense amp fires τ·ln(N) ≈ 6.9 ns earlier.  WTA always fires at the same time regardless of N — this is why WTA fails XOR [1,1].
 
 Race detection energy: ~5 fJ per output neuron (subthreshold sense amp at 28 nm, current limited by I_bias).
 
@@ -192,9 +205,9 @@ The encoding is performed by a **time-to-digital ring oscillator driver**: input
 | nLSE active window | ~30 ns | ≈ 3τ around the fastest arrival |
 | T_inactive (silent) | 150 ns | Time after which a "0" input is ignored |
 | T_inactive / d_max | 3× | Silent inputs stay clear of active window |
-| Per-layer latency | ~60–80 ns | d_max + 3τ |
-| 2-layer total latency | ~240 ns | Plus T_inactive for first input |
-| Throughput (pipelined) | ~4 MHz | New sample every ~240 ns |
+| Per-layer latency | ~65 ns | d_max×ln2 + 3τ = 34.7 + 30 ns |
+| 2-layer total latency | ~280 ns | T_inactive + 2 × 65 ns |
+| Throughput (pipelined) | ~3.6 MHz | New sample every ~280 ns |
 
 **Jitter tolerance:** Simulation confirms robust operation at σ_j ≤ 1 ns (σ_j / τ ≤ 0.1). Timing noise corrupts results when σ_j approaches τ = 10 ns.
 

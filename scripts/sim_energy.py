@@ -9,7 +9,6 @@ Usage:
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 
 from memristor.energy import (
@@ -111,16 +110,25 @@ def main() -> None:
     # -------------------------------------------------------------------------
     print_section("INFERENCE LATENCY ESTIMATE (MNIST)")
     kappa_ns = 15.81  # R_nom × C_cell
+    d_min_ns = 5.0
+    d_max_ns = 50.0
     tau_ns = 10.0
     T_inactive_ns = 150.0
+    import math
+    t_cross_max_ns = d_max_ns * math.log(2)  # = 34.66 ns: worst-case threshold crossing
     print(f"  κ (R_nom×C_cell):   {kappa_ns:.2f} ns")
-    d_min = kappa_ns * np.exp(-np.log(10))
-    print(f"  Delay range:        {d_min:.1f} – {kappa_ns:.1f} ns  (10× conductance ratio)")
+    print(f"  Delay range:        {d_min_ns:.0f} – {d_max_ns:.0f} ns")
+    print(f"  Max threshold crossing: d_max×ln2 = {t_cross_max_ns:.1f} ns")
     print(f"  nLSE window (3τ):   {3*tau_ns:.0f} ns  (τ = {tau_ns:.0f} ns)")
     print(f"  T_inactive:         {T_inactive_ns:.0f} ns  (silent input time)")
     n_layers = len(mnist_net.layers)
-    latency_ns = T_inactive_ns + n_layers * (kappa_ns + 3 * tau_ns)
-    print(f"  Estimated latency:  {latency_ns:.0f} ns  ({n_layers} layers, worst-case pipeline)")
+    # Worst-case per-layer latency: slowest active branch crossing + nLSE window.
+    # Branches in the 3τ active window have tc ≤ t_cross_fastest + 3τ ≈ 3.5 + 30 = 33.5 ns;
+    # sense amp fires at approximately the nLSE of these, bounded by t_cross_max.
+    per_layer_ns = t_cross_max_ns + 3 * tau_ns   # = 34.66 + 30 = 64.66 ns (conservative)
+    latency_ns = T_inactive_ns + n_layers * per_layer_ns
+    print(f"  Per-layer latency:  {per_layer_ns:.0f} ns  (d_max×ln2 + 3τ, conservative)")
+    print(f"  Estimated latency:  {latency_ns:.0f} ns  ({n_layers} layers + T_inactive)")
     throughput_MHz = 1e3 / latency_ns  # 1 ns = 1e-9 s; MHz = 1e6/s
     print(f"  Throughput:         {throughput_MHz:.1f} MHz  (samples/s in pipelined mode)")
 

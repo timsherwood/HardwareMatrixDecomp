@@ -7,10 +7,15 @@ fixed load capacitor C_cell.  The delay is d = R_mem × C_cell = κ·exp(-u),
 so κ = R_nom × C_cell where R_nom is the resistance at u=0 (log-conductance).
 
 With default values κ = 15.81 ns:
-  C_cell = 100 fF  →  R_nom = 158 kΩ  (RRAM LRS range: 10–500 kΩ  ✓)
-  d_min  = 5 ns    →  R_min = 50 kΩ   (high conductance state)
-  d_max  = 50 ns   →  R_max = 500 kΩ  (low conductance state)
+  C_cell = 100 fF  →  R_nom = 158 kΩ  (RRAM intermediate-state range ✓)
+  d_min  = 5 ns    →  R_min = 50 kΩ   (highest-conductance state used)
+  d_max  = 50 ns   →  R_max = 500 kΩ  (lowest-conductance state used)
   Ratio  = 10×     →  one decade of conductance swing  ✓
+
+Note: 50–500 kΩ falls in the HRS (high-resistance state) range of typical
+HfO₂ RRAM.  The intermediate states are reached by iterative pulse-and-verify
+(P&V) programming that partially resets from LRS, giving fine-grained control
+of the resistance within the operating window.
 
 Energy sources
 --------------
@@ -93,7 +98,8 @@ class HardwareSpec:
     # ---- Race detection ---------------------------------------------------
     E_comparator_fJ: float = 5.0
     """Energy per race-detection event per output neuron (fJ).
-    Clocked sense-amplifier or current-race flip-flop in 28 nm."""
+    Subthreshold-biased differential-pair sense amplifier (nLSE soft-min)
+    in 28 nm; a simple threshold comparator (WTA) is insufficient."""
 
     # ---- Input drivers ----------------------------------------------------
     E_driver_fJ: float | None = None
