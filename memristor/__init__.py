@@ -22,6 +22,14 @@ Milestones (spec Section 22):
 """
 
 from memristor.delay_cell import DelayCell
+from memristor.energy import (
+    HardwareSpec,
+    InferenceEnergy,
+    TrainingEnergy,
+    compare_to_digital,
+    estimate_inference_energy,
+    estimate_training_energy,
+)
 from memristor.gradient_analysis import (
     extract_delay_gradients,
     gradient_active_fraction,
@@ -38,9 +46,15 @@ __all__ = [
     "DelayCell",
     "DelayLayer",
     "HILTrainer",
+    "HardwareSpec",
+    "InferenceEnergy",
     "MemristorNet",
     "MemristorTrainer",
     "NoisyMemristorNet",
+    "TrainingEnergy",
+    "compare_to_digital",
+    "estimate_inference_energy",
+    "estimate_training_energy",
     "extract_delay_gradients",
     "gradient_active_fraction",
     "gradient_summary",
