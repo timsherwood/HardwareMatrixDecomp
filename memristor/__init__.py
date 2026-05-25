@@ -27,6 +27,7 @@ from memristor.gradient_analysis import (
     gradient_active_fraction,
     gradient_summary,
 )
+from memristor.hil_training import HILTrainer
 from memristor.network import ComplementaryDelayLayer, DelayLayer, MemristorNet
 from memristor.noise import NoisyMemristorNet
 from memristor.quantization import make_quantized_net, quantize_complementary, quantize_delays
@@ -36,6 +37,7 @@ __all__ = [
     "ComplementaryDelayLayer",
     "DelayCell",
     "DelayLayer",
+    "HILTrainer",
     "MemristorNet",
     "MemristorTrainer",
     "NoisyMemristorNet",
