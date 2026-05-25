@@ -23,6 +23,8 @@ Milestones (spec Section 22):
 
 from memristor.delay_cell import DelayCell
 from memristor.network import DelayLayer, MemristorNet
+from memristor.noise import NoisyMemristorNet
+from memristor.quantization import make_quantized_net, quantize_delays
 from memristor.training import MemristorTrainer
 
 __all__ = [
@@ -30,4 +32,7 @@ __all__ = [
     "DelayLayer",
     "MemristorNet",
     "MemristorTrainer",
+    "NoisyMemristorNet",
+    "make_quantized_net",
+    "quantize_delays",
 ]
