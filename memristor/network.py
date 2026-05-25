@@ -34,6 +34,8 @@ XOR size (spec Section 13)
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -77,6 +79,61 @@ class DelayLayer(nn.Module):
         return self.n_in * self.n_out
 
 
+class ComplementaryDelayLayer(nn.Module):
+    """Single-parameter differential pair: d_pos + d_neg = d_min + d_max.
+
+    For n_levels discrete levels (0..N-1), encoding x means d_pos is at
+    level x and d_neg is at level N-1-x.  In the continuous limit:
+
+        d_neg = (d_min + d_max) - d_pos
+
+    This halves device count vs. independent u_pos/u_neg, gives naturally
+    bipolar weights symmetric around zero, and means common-mode drift
+    partially cancels in T_minus - T_plus.
+
+    The midpoint (zero weight) is at d_pos = d_neg = (d_min + d_max) / 2.
+    At u = 0 the unclamped d_pos = kappa (geometric midpoint), which may
+    differ slightly from the arithmetic midpoint (d_min + d_max) / 2 = 27.5 ns
+    for default parameters; the clamp brings it into range.
+    """
+
+    def __init__(
+        self,
+        n_in: int,
+        n_out: int,
+        kappa: float = 15.81,
+        d_min: float = 5.0,
+        d_max: float = 50.0,
+        init_std: float = 0.3,
+    ) -> None:
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+        self.kappa = kappa
+        self.d_min = d_min
+        self.d_max = d_max
+        # Single parameter: u controls d_pos; d_neg is fully determined.
+        # Initialise near u_mid = ln(kappa / midpoint) so d_pos starts near
+        # the arithmetic midpoint (d_min + d_max) / 2 = 27.5 ns (zero weight).
+        u_mid = math.log(kappa / ((d_min + d_max) / 2.0))
+        self.u = nn.Parameter(torch.randn(n_in, n_out) * init_std + u_mid)
+
+    def delays(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return (d_pos, d_neg) tensors of shape (n_in, n_out).
+
+        d_pos = clamp(kappa * exp(-u), d_min, d_max)
+        d_neg = (d_min + d_max) - d_pos
+        """
+        d_pos = torch.clamp(self.kappa * torch.exp(-self.u), self.d_min, self.d_max)
+        d_neg = (self.d_min + self.d_max) - d_pos
+        return d_pos, d_neg
+
+    @property
+    def n_signed_branches(self) -> int:
+        """Number of signed differential branch pairs in this layer."""
+        return self.n_in * self.n_out
+
+
 class MemristorNet(nn.Module):
     """Multi-layer memristive delay network.
 
@@ -98,7 +155,10 @@ class MemristorNet(nn.Module):
         Arrival time for inactive (0) binary inputs (ns).  Should be >> d_max
         so inactive inputs don't influence the nLSE race.
     kappa, d_min, d_max:
-        Passed to each DelayLayer.
+        Passed to each DelayLayer / ComplementaryDelayLayer.
+    complementary:
+        If True, use ComplementaryDelayLayer (single u per branch pair)
+        instead of DelayLayer (independent u_pos / u_neg).
     """
 
     def __init__(
@@ -112,6 +172,7 @@ class MemristorNet(nn.Module):
         kappa: float = 15.81,
         d_min: float = 5.0,
         d_max: float = 50.0,
+        complementary: bool = False,
     ) -> None:
         super().__init__()
         self.n_inputs = n_inputs
@@ -123,9 +184,10 @@ class MemristorNet(nn.Module):
         in_sizes = [n_inputs + 1] + [h + 1 for h in hidden_sizes]
         out_sizes = hidden_sizes + [n_outputs]
 
+        layer_cls = ComplementaryDelayLayer if complementary else DelayLayer
         self.layers = nn.ModuleList(
             [
-                DelayLayer(in_s, out_s, kappa, d_min, d_max)
+                layer_cls(in_s, out_s, kappa, d_min, d_max)
                 for in_s, out_s in zip(in_sizes, out_sizes, strict=True)
             ]
         )

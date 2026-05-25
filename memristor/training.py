@@ -72,7 +72,7 @@ class MemristorTrainer:
     def _sgd_update(self) -> None:
         with torch.no_grad():
             for layer in self.net.layers:
-                for param in (layer.u_pos, layer.u_neg):
+                for _name, param in layer.named_parameters():
                     if param.grad is not None:
                         param.data -= self.eta * param.grad
 
@@ -238,9 +238,9 @@ class MemristorTrainer:
                     if y_arr.ndim == 1:
                         y_arr = y_arr[:, np.newaxis]  # (B, 1)
                     targets = (y_arr.astype(np.float32) > 0.5).astype(int)
-                    correct += int(np.sum(
-                        [np.array_equal(p, t) for p, t in zip(preds, targets, strict=True)]
-                    ))
+                    correct += int(
+                        np.sum([np.array_equal(p, t) for p, t in zip(preds, targets, strict=True)])
+                    )
         return correct / len(xs)
 
     def compute_branch_targets(self) -> list[dict[str, object]]:
@@ -249,12 +249,12 @@ class MemristorTrainer:
         This is the hardware program-and-verify input: the trainer
         computes u_new, which translates to d_target = kappa * exp(-u_new).
         The physical device is then programmed to this target delay.
+
+        Works with both DelayLayer (u_pos / u_neg) and ComplementaryDelayLayer (u).
         """
         targets = []
         for layer_idx, layer in enumerate(self.net.layers):
-            kappa = layer.kappa
-            d_pos = (kappa * torch.exp(-layer.u_pos)).clamp(layer.d_min, layer.d_max)
-            d_neg = (kappa * torch.exp(-layer.u_neg)).clamp(layer.d_min, layer.d_max)
+            d_pos, d_neg = layer.delays()
             targets.append(
                 {
                     "layer": layer_idx,

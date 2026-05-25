@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from memristor.network import MemristorNet
+from memristor.network import ComplementaryDelayLayer, MemristorNet
 from memristor.training import MemristorTrainer
 
 XOR_X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
@@ -64,6 +64,51 @@ def quantize_delays(
     return result
 
 
+def quantize_complementary(
+    d_pos: torch.Tensor,
+    d_min: float,
+    d_max: float,
+    n_levels: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Snap d_pos to its nearest level and derive d_neg from the complementary constraint.
+
+    For a complementary pair the level indices satisfy:
+
+        level_pos + level_neg = n_levels - 1
+
+    so:
+
+        d_pos_q[k]  = d_min + k * step           (k = 0 … n_levels-1)
+        d_neg_q[k]  = d_min + (n_levels-1-k) * step  = d_max - k * step
+
+    which is equivalent to ``d_neg_q = d_min + d_max - d_pos_q``.
+
+    Parameters
+    ----------
+    d_pos:
+        Continuous positive-branch delays (ns).
+    d_min, d_max:
+        Delay range.
+    n_levels:
+        Number of discrete levels (must be >= 2).
+
+    Returns
+    -------
+    (d_pos_q, d_neg_q) — quantized pair satisfying d_pos_q + d_neg_q = d_min + d_max.
+    """
+    if n_levels < 2:
+        raise ValueError(f"n_levels must be >= 2, got {n_levels}")
+    step = (d_max - d_min) / (n_levels - 1)
+    # Snap d_pos to nearest level
+    level_pos = torch.round((d_pos.clamp(d_min, d_max) - d_min) / step).long()
+    level_pos = level_pos.clamp(0, n_levels - 1)
+    # Complementary: level_neg = n_levels - 1 - level_pos
+    level_neg = (n_levels - 1) - level_pos
+    d_pos_q = d_min + level_pos.float() * step
+    d_neg_q = d_min + level_neg.float() * step
+    return d_pos_q, d_neg_q
+
+
 def make_quantized_net(
     net: MemristorNet,
     n_levels: int | None = None,
@@ -71,23 +116,44 @@ def make_quantized_net(
 ) -> MemristorNet:
     """Return a deep copy of net with all delay parameters quantized.
 
-    The copy's u_pos/u_neg are set so that delays() returns the quantized
-    delay values.  No gradients are required in the returned copy.
+    For DelayLayer: u_pos/u_neg are set so that delays() returns the
+    quantized delay values independently.
+
+    For ComplementaryDelayLayer: d_pos is quantized with the complementary
+    constraint (``quantize_complementary``), and u is set from d_pos_q.
+
+    No gradients are required in the returned copy.
     """
     q_net = copy.deepcopy(net)
     with torch.no_grad():
         for orig_layer, q_layer in zip(net.layers, q_net.layers, strict=True):
             d_pos, d_neg = orig_layer.delays()
-            d_pos_q = quantize_delays(
-                d_pos, orig_layer.d_min, orig_layer.d_max, n_levels, tdc_res
-            )
-            d_neg_q = quantize_delays(
-                d_neg, orig_layer.d_min, orig_layer.d_max, n_levels, tdc_res
-            )
-            # Invert d = kappa * exp(-u)  →  u = ln(kappa / d)
             kappa = torch.tensor(orig_layer.kappa, dtype=torch.float32)
-            q_layer.u_pos.data = torch.log(kappa / d_pos_q)
-            q_layer.u_neg.data = torch.log(kappa / d_neg_q)
+
+            if isinstance(orig_layer, ComplementaryDelayLayer):
+                # Use complementary quantization if n_levels is given
+                if n_levels is not None and n_levels >= 2:
+                    d_pos_q, _d_neg_q = quantize_complementary(
+                        d_pos, orig_layer.d_min, orig_layer.d_max, n_levels
+                    )
+                else:
+                    d_pos_q = d_pos.clone()
+                if tdc_res is not None and tdc_res > 0.0:
+                    d_pos_q = torch.round(d_pos_q / tdc_res) * tdc_res
+                    d_pos_q = d_pos_q.clamp(orig_layer.d_min, orig_layer.d_max)
+                # u = ln(kappa / d_pos)
+                q_layer.u.data = torch.log(kappa / d_pos_q)  # type: ignore[attr-defined]
+            else:
+                # Standard independent quantization for DelayLayer
+                d_pos_q = quantize_delays(
+                    d_pos, orig_layer.d_min, orig_layer.d_max, n_levels, tdc_res
+                )
+                d_neg_q = quantize_delays(
+                    d_neg, orig_layer.d_min, orig_layer.d_max, n_levels, tdc_res
+                )
+                # Invert d = kappa * exp(-u)  →  u = ln(kappa / d)
+                q_layer.u_pos.data = torch.log(kappa / d_pos_q)
+                q_layer.u_neg.data = torch.log(kappa / d_neg_q)
     return q_net
 
 
@@ -171,10 +237,7 @@ def quantization_accuracy_sweep(
             for net in converged_nets:
                 q_net = make_quantized_net(net, n_levels=n_levels, tdc_res=tdc_res)
                 with torch.no_grad():
-                    preds = [
-                        int(float(q_net.predict(x)[0]) > 0.5)
-                        for x in XOR_X
-                    ]
+                    preds = [int(float(q_net.predict(x)[0]) > 0.5) for x in XOR_X]
                 correct = sum(p == int(y) for p, y in zip(preds, XOR_Y, strict=True))
                 xor_fracs.append(correct / len(XOR_Y))
                 if correct == len(XOR_Y):
@@ -202,7 +265,7 @@ def print_sweep_table(result: QuantizationSweepResult) -> None:
     print()
 
     col_w = 14
-    header = f"{'':12s}" + "".join(f"{'n='+str(n):>{col_w}}" for n in levels_seen)
+    header = f"{'':12s}" + "".join(f"{'n=' + str(n):>{col_w}}" for n in levels_seen)
     print(header)
     print("-" * len(header))
 
