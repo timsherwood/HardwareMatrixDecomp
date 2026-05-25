@@ -27,3 +27,13 @@ outputs/
 checkpoints/
 *.pt
 *.onnx
+
+# Generated data (large / regenerable)
+data/MNIST/
+data/FashionMNIST/
+data/CIFAR10/
+data/*.csv
+data/*.pt
+
+# Local Claude Code settings and session state (contains secrets)
+.claude/
