@@ -103,12 +103,27 @@ p[j] = sigmoid(margin[j] / τ_d)                   ← output probability
 
 ### 4.2 Circuit Implementation
 
-**The nLSE is naturally implemented by a current-summing sense amplifier:**
+**The nLSE requires a subthreshold-biased differential-pair sense amplifier.**
 
-- Each positive branch pulse drives a small current onto a shared wire
-- The first sufficiently large current deflection triggers the sense amplifier
-- This is electrically equivalent to the soft-min of arrival times
-- Race detection energy: ~5 fJ per output neuron (clocked sense amp / current-race flip-flop at 28 nm)
+A simple CMOS threshold comparator (Winner-Take-All / WTA) is **insufficient** — this was verified by circuit-level simulation (`scripts/spice_xor.py`).  WTA always fires at the earliest threshold crossing regardless of how many branches arrive simultaneously, so it cannot distinguish N=1 from N=2 simultaneous inputs.  XOR requires that distinction: the [1,1] pattern depends on two negative branches combining to pull the race time *before* t=0, which is only achievable with the nLSE.
+
+**Required circuit:** Each branch drives a transistor biased in subthreshold.  In subthreshold the drain current is exponential in gate voltage:
+
+```
+I_branch(t) ∝ exp(V_branch(t) / V_T)
+```
+
+All branch currents sum on a shared output node.  When the total current crosses a threshold, the sense amp fires.  Because each I_branch(t) is exponential in the RC ramp V_branch(t), the firing time satisfies exactly the nLSE equation:
+
+```
+T_fire = −τ · log Σ_i exp(−t_cross_i / τ)     τ = C_out · V_T / I_bias
+```
+
+This is standard analog VLSI — the same exponential-transconductance principle underlies Winner-Take-All networks (Mead 1989) and silicon cochlea circuits (Lazzaro et al. 1989).
+
+Key property: **nLSE can fire before the earliest threshold crossing** when multiple branches combine (acausal firing).  Physically, each branch contributes a small but nonzero exponential current even while its RC ramp is still below V_th, allowing the shared node to cross its threshold early.
+
+Race detection energy: ~5 fJ per output neuron (subthreshold sense amp at 28 nm, current limited by I_bias).
 
 ### 4.3 Hidden Layer Output
 
@@ -193,7 +208,7 @@ The encoding is performed by a **time-to-digital ring oscillator driver**: input
 |---|---|---|
 | Input pulse drivers | 1,056 fJ | 33 active inputs × 32 fJ/driver |
 | Delay cell traversal | 11,088 fJ | ~346 active cells × 32 fJ/cell |
-| Race detection | 210 fJ | 42 neurons × 5 fJ/comparator |
+| Race detection | 210 fJ | 42 neurons × 5 fJ/sense amp (subthreshold nLSE) |
 | **Total** | **12,354 fJ (12.4 pJ)** | |
 
 **Active fraction** (~25% of branches fire per inference): inputs with T_in outside the [T_fastest, T_fastest + 3τ] window contribute negligible energy to the nLSE operation.
@@ -320,7 +335,7 @@ The design retains significant advantage over digital MACs across the full techn
 - **Process node:** 28 nm or sub-28 nm CMOS with embedded RRAM back-end
 - **RRAM back-end:** 1T1R cell structure (one transistor, one resistor) for access control
 - **Delay cells:** Fixed C_cell implemented as MOM capacitor in metal routing layers
-- **Race detectors:** Clocked sense amplifiers, one per output neuron per layer
+- **Race detectors:** Subthreshold-biased differential-pair sense amplifiers (nLSE), one per output neuron per layer; a simple WTA threshold comparator is insufficient (see Section 4.2 and `scripts/spice_xor.py`)
 - **TDC:** Flash TDC, shared across output channels (time-multiplexed during training)
 - **P&V controller:** On-chip state machine; no off-chip communication during training
 - **Digital control:** Minimal — only P&V sequencer and SPSA perturbation LFSR
