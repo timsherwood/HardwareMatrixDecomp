@@ -70,6 +70,11 @@ class HILTrainer:
         Each B_l has shape (n_out_l, n_final_out) with entries ~ N(0, feedback_std).
     binary_input:
         Encode inputs via encode_binary (True) or encode_time (False).
+    multiclass:
+        If True, use cross-entropy loss with integer class labels (n_outputs > 1).
+        Output error for DFA becomes softmax(logits) - one_hot(y).
+    batch_size:
+        Mini-batch size for epoch() calls (SPSA and DFA).  Full-batch if None.
     seed:
         RNG seed for reproducible feedback matrices.
     """
@@ -80,11 +85,16 @@ class HILTrainer:
         eta: float = 0.05,
         feedback_std: float = 1.0,
         binary_input: bool = True,
+        multiclass: bool = False,
+        batch_size: int | None = None,
         seed: int | None = None,
     ) -> None:
         self.net = net
         self.eta = eta
         self.binary_input = binary_input
+
+        self.multiclass = multiclass
+        self.batch_size = batch_size
 
         rng = torch.Generator()
         if seed is not None:
@@ -100,6 +110,36 @@ class HILTrainer:
 
     def _encode(self, x: np.ndarray) -> torch.Tensor:
         return self.net.encode_binary(x) if self.binary_input else self.net.encode_time(x)
+
+    def _batch_loss(self, T_batch: torch.Tensor, y_t: torch.Tensor) -> float:
+        """Compute batch loss (binary cross-entropy or cross-entropy) without grad."""
+        with torch.no_grad():
+            if self.multiclass:
+                logits = self.net.forward_logits_batch(T_batch)  # (B, n_out)
+                return float(functional.cross_entropy(logits, y_t.long().squeeze(1)))
+            else:
+                probs = self.net.forward_batch(T_batch)  # (B, 1)
+                return float(functional.binary_cross_entropy(probs.clamp(1e-7, 1 - 1e-7), y_t))
+
+    def _output_error(self, T_batch: torch.Tensor, y_t: torch.Tensor) -> torch.Tensor:
+        """Compute ∂L/∂margin for each output neuron and sample.
+
+        Returns (B, n_out) tensor of per-sample, per-neuron error signals.
+        For binary: e = (sigmoid(margin/tau_d) - y) / tau_d
+        For multiclass: e = (softmax(margins/tau_d) - one_hot(y)) / tau_d
+        """
+        with torch.no_grad():
+            if self.multiclass:
+                logits = self.net.forward_logits_batch(T_batch)  # (B, n_out)
+                p = torch.softmax(logits, dim=1)  # (B, n_out)
+                y_idx = y_t.long().squeeze(1)  # (B,)
+                one_hot = torch.zeros_like(p)
+                one_hot.scatter_(1, y_idx.unsqueeze(1), 1.0)
+                return (p - one_hot) / self.net.tau_d
+            else:
+                margins = self.net._forward_margins_batch(T_batch)  # (B, 1)
+                p = torch.sigmoid(margins / self.net.tau_d)
+                return (p - y_t) / self.net.tau_d
 
     @staticmethod
     def _soft_weights(A: torch.Tensor, tau: float) -> torch.Tensor:
@@ -321,22 +361,16 @@ class HILTrainer:
         return L0
 
     # ------------------------------------------------------------------
-    # Batched DFA epoch (fast simulation path)
+    # Batched DFA / SPSA — single mini-batch
     # ------------------------------------------------------------------
 
-    def _epoch_dfa_batch(self, xs: np.ndarray, ys: np.ndarray, shuffle: bool = True) -> float:
-        """Full-dataset DFA epoch in one vectorised forward pass.
-
-        Processes all samples simultaneously, averaging gradients over the
-        batch.  ~10× faster than looping step() for small datasets.
-        """
+    def _step_dfa_batch(
+        self, xs: np.ndarray, ys: np.ndarray
+    ) -> float:
+        """DFA update on one mini-batch. Returns scalar loss."""
         n = len(xs)
-        idx = np.random.permutation(n) if shuffle else np.arange(n)
-        xs_s = xs[idx]
-        ys_s = ys[idx]
-
-        T_batch = torch.stack([self._encode(x) for x in xs_s])  # (B, n_in+1)
-        y_t = torch.tensor(ys_s.astype(np.float32)).unsqueeze(1)  # (B, 1)
+        T_batch = torch.stack([self._encode(x) for x in xs])  # (B, n_in+1)
+        y_t = torch.tensor(ys[:, None].astype(np.float32))  # (B, 1)
 
         acts: list[dict[str, torch.Tensor]] = []
         T_current = T_batch
@@ -349,77 +383,45 @@ class HILTrainer:
                 A_pos = T_current.unsqueeze(2) + d_pos.unsqueeze(0)  # (B, n_in, n_out)
                 A_neg = T_current.unsqueeze(2) + d_neg.unsqueeze(0)
 
-                T_plus = -self.net.tau * torch.logsumexp(-A_pos / self.net.tau, dim=1)  # (B, n_out)
+                T_plus = -self.net.tau * torch.logsumexp(-A_pos / self.net.tau, dim=1)
                 T_minus = -self.net.tau * torch.logsumexp(-A_neg / self.net.tau, dim=1)
-                margin = T_minus - T_plus
+                margin = T_minus - T_plus  # (B, n_out)
 
                 act: dict[str, torch.Tensor] = {
-                    "A_pos": A_pos,
-                    "A_neg": A_neg,
-                    "d_pos": d_pos,
-                    "d_neg": d_neg,
-                    "margin": margin,
+                    "A_pos": A_pos, "A_neg": A_neg,
+                    "d_pos": d_pos, "d_neg": d_neg, "margin": margin,
                 }
                 if not is_last:
-                    p = torch.sigmoid(margin / self.net.tau_d)  # (B, n_out)
-                    T_h = p * T_plus + (1.0 - p) * T_minus  # (B, n_out)
+                    p = torch.sigmoid(margin / self.net.tau_d)
+                    T_h = p * T_plus + (1.0 - p) * T_minus
                     act["p"] = p
-                    T_current = torch.cat([T_h, torch.zeros(n, 1)], dim=1)  # (B, n_out+1)
+                    T_current = torch.cat([T_h, torch.zeros(n, 1)], dim=1)
                 acts.append(act)
 
-        # Output error: (B, n_final_out)
-        p_out = torch.sigmoid(acts[-1]["margin"] / self.net.tau_d)
-        loss = float(functional.binary_cross_entropy(p_out.clamp(1e-7, 1 - 1e-7), y_t))
-        e_out_batch = (p_out - y_t) / self.net.tau_d  # (B, n_final_out)
+        loss = self._batch_loss(T_batch, y_t)
+        e_out_batch = self._output_error(T_batch, y_t)  # (B, n_final_out)
 
         with torch.no_grad():
             for idx_l, (layer, act) in enumerate(zip(self.net.layers, acts, strict=True)):
                 is_last = idx_l == n_layers - 1
-                s_pos = self._soft_weights_batch(act["A_pos"], self.net.tau)  # (B, n_in, n_out)
+                s_pos = self._soft_weights_batch(act["A_pos"], self.net.tau)
                 s_neg = self._soft_weights_batch(act["A_neg"], self.net.tau)
 
-                if is_last:
-                    e_j_batch = e_out_batch  # (B, n_final_out)
-                    p_j_batch = None
-                else:
-                    # e_out_batch: (B, n_final_out); B_l: (n_out_l, n_final_out)
-                    # e_h_batch = e_out_batch @ B_l.T: (B, n_out_l)
-                    e_j_batch = e_out_batch @ self.B[idx_l].T  # (B, n_out_l)
-                    p_j_batch = act["p"]  # (B, n_out)
+                e_j_batch = e_out_batch if is_last else e_out_batch @ self.B[idx_l].T
+                p_j_batch = None if is_last else act["p"]
 
                 self._apply_update_batch(
-                    layer,
-                    e_j_batch,
-                    s_pos,
-                    s_neg,
-                    act["d_pos"],
-                    act["d_neg"],
-                    p_j_batch,
-                    is_last,
+                    layer, e_j_batch, s_pos, s_neg,
+                    act["d_pos"], act["d_neg"], p_j_batch, is_last,
                 )
-
         return loss
 
-    # ------------------------------------------------------------------
-    # Batched SPSA epoch (fast simulation path)
-    # ------------------------------------------------------------------
-
-    def _epoch_spsa_batch(
-        self, xs: np.ndarray, ys: np.ndarray, epsilon: float = 0.1
+    def _step_spsa_batch(
+        self, xs: np.ndarray, ys: np.ndarray, epsilon: float
     ) -> float:
-        """Full-dataset SPSA epoch using 3 batched forward passes.
-
-        Perturbs all weights once with random ±1 signs, measures the batch
-        loss at +ε and -ε, then applies the SPSA update.  Averaging over all
-        samples dramatically reduces gradient variance vs. per-sample SPSA.
-        """
-        T_batch = torch.stack([self._encode(x) for x in xs])  # (B, n_in+1)
-        y_t = torch.tensor(ys.astype(np.float32)).unsqueeze(1)  # (B, 1)
-
-        def _batch_loss() -> float:
-            with torch.no_grad():
-                probs = self.net.forward_batch(T_batch)  # (B, n_out)
-                return float(functional.binary_cross_entropy(probs.clamp(1e-7, 1 - 1e-7), y_t))
+        """SPSA update on one mini-batch using 3 forward passes. Returns L0."""
+        T_batch = torch.stack([self._encode(x) for x in xs])
+        y_t = torch.tensor(ys[:, None].astype(np.float32))
 
         deltas: list[dict[str, torch.Tensor]] = []
         for layer in self.net.layers:
@@ -428,17 +430,17 @@ class HILTrainer:
                 d[name] = torch.randint(0, 2, param.shape).float() * 2.0 - 1.0
             deltas.append(d)
 
-        L0 = _batch_loss()
+        L0 = self._batch_loss(T_batch, y_t)
 
         for layer, d in zip(self.net.layers, deltas, strict=True):
             for name, param in layer.named_parameters():
                 param.data += epsilon * d[name]
-        L_plus = _batch_loss()
+        L_plus = self._batch_loss(T_batch, y_t)
 
         for layer, d in zip(self.net.layers, deltas, strict=True):
             for name, param in layer.named_parameters():
                 param.data -= 2.0 * epsilon * d[name]
-        L_minus = _batch_loss()
+        L_minus = self._batch_loss(T_batch, y_t)
 
         for layer, d in zip(self.net.layers, deltas, strict=True):
             for name, param in layer.named_parameters():
@@ -449,7 +451,6 @@ class HILTrainer:
             for layer, d in zip(self.net.layers, deltas, strict=True):
                 for name, param in layer.named_parameters():
                     param.data -= self.eta * grad_scalar * d[name]
-
         return L0
 
     # ------------------------------------------------------------------
@@ -460,17 +461,23 @@ class HILTrainer:
         self,
         xs: np.ndarray,
         ys: np.ndarray,
-        method: str = "dfa",
+        method: str = "spsa",
         shuffle: bool = True,
         spsa_epsilon: float = 0.1,
     ) -> float:
-        """One pass over the dataset.
-
-        Both DFA and SPSA use batched forward passes for speed.
-        """
-        if method == "dfa":
-            return self._epoch_dfa_batch(xs, ys, shuffle=shuffle)
-        return self._epoch_spsa_batch(xs, ys, epsilon=spsa_epsilon)
+        """One pass over the dataset, optionally in mini-batches."""
+        n = len(xs)
+        bs = self.batch_size if self.batch_size is not None else n
+        idx = np.random.permutation(n) if shuffle else np.arange(n)
+        total, count = 0.0, 0
+        for start in range(0, n, bs):
+            bi = idx[start : start + bs]
+            if method == "dfa":
+                total += self._step_dfa_batch(xs[bi], ys[bi])
+            else:
+                total += self._step_spsa_batch(xs[bi], ys[bi], spsa_epsilon)
+            count += 1
+        return total / count
 
     def fit(
         self,
@@ -492,14 +499,23 @@ class HILTrainer:
                 print(f"  epoch {ep:5d}  loss={loss:.4f}  acc={acc:.2%}")
         return losses
 
-    def accuracy(self, xs: np.ndarray, ys: np.ndarray) -> float:
-        """Classification accuracy over the dataset."""
+    def accuracy(self, xs: np.ndarray, ys: np.ndarray, batch_size: int = 256) -> float:
+        """Classification accuracy over the dataset (batched for speed)."""
         correct = 0
-        for x, y in zip(xs, ys, strict=True):
-            T_in = self._encode(x)
-            with torch.no_grad():
-                p = self.net.forward(T_in).detach().numpy()
-            pred = (p > 0.5).astype(int)
-            target = (np.atleast_1d(np.asarray(y)) > 0.5).astype(int)
-            correct += int(np.array_equal(pred, target))
+        with torch.no_grad():
+            for start in range(0, len(xs), batch_size):
+                xb = xs[start : start + batch_size]
+                yb = ys[start : start + batch_size]
+                T_batch = torch.stack([self._encode(x) for x in xb])
+                if self.multiclass:
+                    logits = self.net.forward_logits_batch(T_batch)
+                    preds = logits.argmax(dim=1).numpy()
+                    correct += int(np.sum(preds == yb.astype(int)))
+                else:
+                    probs = self.net.forward_batch(T_batch).numpy()
+                    preds = (probs > 0.5).astype(int)
+                    targets = (yb.astype(np.float32)[:, None] > 0.5).astype(int)
+                    correct += int(
+                        np.sum([np.array_equal(p, t) for p, t in zip(preds, targets, strict=True)])
+                    )
         return correct / len(xs)
