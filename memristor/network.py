@@ -164,7 +164,7 @@ class MemristorNet(nn.Module):
     # ------------------------------------------------------------------
 
     def forward(self, T_in: torch.Tensor) -> torch.Tensor:
-        """Temporal forward pass.
+        """Temporal forward pass (single sample).
 
         Parameters
         ----------
@@ -173,8 +173,40 @@ class MemristorNet(nn.Module):
 
         Returns
         -------
-        p_out of shape (n_outputs,) — output probabilities.
+        p_out of shape (n_outputs,) — output probabilities via sigmoid.
         """
+        return torch.sigmoid(self._forward_margins(T_in) / self.tau_d)
+
+    def forward_logits(self, T_in: torch.Tensor) -> torch.Tensor:
+        """Return raw margins (logits) for a single sample.
+
+        Shape: (n_outputs,).  Use with F.cross_entropy for multi-class training.
+        """
+        return self._forward_margins(T_in) / self.tau_d
+
+    def forward_batch(self, T_in: torch.Tensor) -> torch.Tensor:
+        """Batched temporal forward pass.
+
+        Parameters
+        ----------
+        T_in:
+            Arrival-time matrix of shape (B, n_inputs + 1).
+
+        Returns
+        -------
+        p_out of shape (B, n_outputs) — output probabilities via sigmoid.
+        """
+        return torch.sigmoid(self._forward_margins_batch(T_in) / self.tau_d)
+
+    def forward_logits_batch(self, T_in: torch.Tensor) -> torch.Tensor:
+        """Batched logit forward pass.  Shape: (B, n_outputs).
+
+        Use with F.cross_entropy for multi-class mini-batch training.
+        """
+        return self._forward_margins_batch(T_in) / self.tau_d
+
+    def _forward_margins(self, T_in: torch.Tensor) -> torch.Tensor:
+        """Core single-sample pass; returns raw margins (n_outputs,)."""
         T_current = T_in
         n_layers = len(self.layers)
 
@@ -192,13 +224,45 @@ class MemristorNet(nn.Module):
             margin = T_minus - T_plus
 
             if is_last:
-                return torch.sigmoid(margin / self.tau_d)
+                return margin
 
             # Hidden layer: weighted timing output so gradient reaches both sides
             p = torch.sigmoid(margin / self.tau_d)
             T_h = p * T_plus + (1.0 - p) * T_minus
             # Append bias node (always fires at t = 0)
             T_current = torch.cat([T_h, torch.zeros(1)])
+
+        raise RuntimeError("No layers defined")  # pragma: no cover
+
+    def _forward_margins_batch(self, T_in: torch.Tensor) -> torch.Tensor:
+        """Core batched pass; returns raw margins (B, n_outputs).
+
+        T_in: (B, n_inputs + 1)
+        """
+        B = T_in.shape[0]
+        T_current = T_in  # (B, n_in)
+        n_layers = len(self.layers)
+
+        for idx, layer in enumerate(self.layers):
+            is_last = idx == n_layers - 1
+            d_pos, d_neg = layer.delays()  # (n_in, n_out)
+
+            # (B, n_in, 1) + (1, n_in, n_out) → (B, n_in, n_out)
+            A_pos = T_current.unsqueeze(2) + d_pos.unsqueeze(0)
+            A_neg = T_current.unsqueeze(2) + d_neg.unsqueeze(0)
+
+            # nLSE over incoming branches dim=1 → (B, n_out)
+            T_plus = -self.tau * torch.logsumexp(-A_pos / self.tau, dim=1)
+            T_minus = -self.tau * torch.logsumexp(-A_neg / self.tau, dim=1)
+            margin = T_minus - T_plus  # (B, n_out)
+
+            if is_last:
+                return margin
+
+            p = torch.sigmoid(margin / self.tau_d)
+            T_h = p * T_plus + (1.0 - p) * T_minus  # (B, n_out)
+            # Append bias node: (B, n_out+1)
+            T_current = torch.cat([T_h, torch.zeros(B, 1)], dim=1)
 
         raise RuntimeError("No layers defined")  # pragma: no cover
 
