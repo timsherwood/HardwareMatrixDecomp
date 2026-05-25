@@ -22,17 +22,27 @@ Milestones (spec Section 22):
 """
 
 from memristor.delay_cell import DelayCell
-from memristor.network import DelayLayer, MemristorNet
+from memristor.gradient_analysis import (
+    extract_delay_gradients,
+    gradient_active_fraction,
+    gradient_summary,
+)
+from memristor.network import ComplementaryDelayLayer, DelayLayer, MemristorNet
 from memristor.noise import NoisyMemristorNet
-from memristor.quantization import make_quantized_net, quantize_delays
+from memristor.quantization import make_quantized_net, quantize_complementary, quantize_delays
 from memristor.training import MemristorTrainer
 
 __all__ = [
+    "ComplementaryDelayLayer",
     "DelayCell",
     "DelayLayer",
     "MemristorNet",
     "MemristorTrainer",
     "NoisyMemristorNet",
+    "extract_delay_gradients",
+    "gradient_active_fraction",
+    "gradient_summary",
     "make_quantized_net",
+    "quantize_complementary",
     "quantize_delays",
 ]
