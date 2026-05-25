@@ -103,26 +103,25 @@ p[j] = sigmoid(margin[j] / τ_d)                   ← output probability
 
 ### 4.2 Circuit Implementation
 
-**The nLSE requires a subthreshold-biased differential-pair sense amplifier.**
+**The nLSE requires a sense amplifier with exponential-transconductance branches.**
 
-A simple CMOS threshold comparator (Winner-Take-All / WTA) is **insufficient** — this was verified by circuit-level simulation (`scripts/spice_xor.py`).  WTA always fires at the earliest threshold crossing regardless of how many branches arrive simultaneously, so it cannot distinguish N=1 from N=2 simultaneous inputs.  XOR requires that distinction: the [1,1] pattern depends on two negative branches combining to pull the race time *before* t=0, which is only achievable with the nLSE.
+A simple CMOS threshold comparator (Winner-Take-All / WTA) is **insufficient** — verified by circuit-level simulation (`scripts/spice_xor.py`).  WTA always fires at the earliest threshold crossing regardless of how many branches arrive simultaneously and cannot distinguish N=1 from N=2 simultaneous inputs.  XOR requires that distinction: for input [1,1], the two negative branches must combine to produce an earlier sense-amp firing than either branch alone, which in turn must produce a negative output margin.
 
-**Required circuit:** Each branch drives a transistor biased in subthreshold.  In subthreshold the drain current grows exponentially with gate voltage:
+**Required circuit behavior:** Each branch drives a transistor biased in subthreshold.  In subthreshold the drain current grows exponentially with gate voltage:
 
 ```
 I_branch(t) ∝ exp(V_branch(t) / V_T)
 ```
 
-Because V_branch(t) is an RC ramp, I_branch grows from a small but nonzero baseline at t = T_in and continues rising past the threshold crossing.  All branch currents sum on a shared output node.  When the total current crosses a threshold I_th, the sense amp fires at:
+Because V_branch(t) is a rising RC ramp, I_branch grows from a small but nonzero baseline at t = T_in and continues increasing past the threshold crossing.  All branch currents sum on a shared output node.  When the total current crosses a threshold I_th, the sense amp fires at:
 
 ```
-T_fire = C + (−τ · log Σ_i exp(−t_cross_i / τ))     τ ≈ V_T · d / V_th
-       = C + nLSE(t_cross_i)
+T_fire = C + nLSE(t_cross_i ; τ_sense)     where  nLSE(tc ; τ) = −τ · log Σ_i exp(−tc_i / τ)
 
-where C = τ · log(I_th / I_baseline) > 0 is a positive circuit constant.
+C = τ_sense · log(I_th / I_baseline) > 0  is a positive circuit offset.
 ```
 
-The constant C makes T_fire always positive and physically realizable.  Crucially, C cancels in the margin:
+The constant C makes T_fire positive for all reasonable threshold settings.  Crucially, C cancels in the output margin:
 
 ```
 margin = T_minus − T_plus
@@ -130,11 +129,35 @@ margin = T_minus − T_plus
        = nLSE(t_cross_neg) − nLSE(t_cross_pos)
 ```
 
-so the **margin sign — and therefore the classification — is identical to the software model**, regardless of the threshold setting.  This was verified in `scripts/spice_xor.py` by sweeping C from 0 to 50 ns: [1,1] gives the correct negative margin for all physically realizable values (see Stage 5 analysis).
+so the **margin sign — and therefore the classification — is identical to the software model**, regardless of the threshold setting.  Verified in `scripts/spice_xor.py` Stage 5 by sweeping C from 0 to 50 ns: XOR [1,1] gives the correct negative margin for all physically realizable values.
 
-This is standard analog VLSI — the same exponential-transconductance principle underlies Winner-Take-All networks (Mead 1989) and silicon cochlea circuits (Lazzaro et al. 1989).
+#### τ_sense: the critical design parameter
 
-Key property: **the sense amp fires earlier when N simultaneous branches combine** because each branch contributes pre-threshold current (from I_baseline) that accumulates before any individual branch reaches V_th.  With N=2 vs N=1 simultaneous branches at the same crossing time, the physical sense amp fires τ·ln(N) ≈ 6.9 ns earlier.  WTA always fires at the same time regardless of N — this is why WTA fails XOR [1,1].
+The effective integration time constant τ_sense of the physical sense amp is NOT simply the transistor subthreshold slope.  For a subthreshold transistor driven by an RC ramp of delay d, the current growth near the threshold crossing has time constant:
+
+```
+τ_branch ≈ 2 · V_T · d / V_DD    (slope of RC ramp at 50% crossing)
+```
+
+| d (ns) | τ_branch |
+|---|---|
+| 5 ns | 0.33 ns |
+| 15.8 ns (κ) | 1.0 ns |
+| 50 ns | 3.25 ns |
+
+**These are well below τ = 10 ns used in software training.**  At τ_sense < 6 ns the nLSE soft-min degenerates toward WTA and the trained network loses correct [1,1] classification (verified numerically in `scripts/spice_xor.py` Stage 5 margin sweep).
+
+**The sense amp must therefore be designed to achieve τ_sense ≥ 6 ns.**  Two routes:
+
+1. **Current-mode gain:** place a current-mirror gain stage (factor A = τ_target / τ_branch ≈ 5–20×) between each branch transistor and the summing node.  This scales τ_sense up to τ_target without changing the nLSE functional form.
+
+2. **Hardware-in-the-loop retraining:** deploy the actual sense amp at its natural τ_sense and run SPSA training directly on hardware.  Training adapts the RRAM weights to whatever τ_sense the circuit achieves.  The XOR simulation confirms the architecture is expressively sufficient for any τ_sense that produces meaningful multiplicity sensitivity.
+
+Both routes are compatible with the P&V/SPSA training pipeline.  The engineering choice between them is a circuit-design decision; the simulation validates the architecture assuming either approach is executed.
+
+This technique follows the same exponential-transconductance principle as silicon cochlea circuits (Lazzaro et al. 1989) and soft-max WTA networks (Mead 1989).
+
+Key property: **the sense amp fires τ_sense · ln(N) earlier when N simultaneous branches combine** vs a single branch at the same crossing time.  WTA fires at the same time regardless of N — this is why WTA structurally fails XOR [1,1] (16/16 tested converged networks fail under WTA; verified in simulation).
 
 Race detection energy: ~5 fJ per output neuron (subthreshold sense amp at 28 nm, current limited by I_bias).
 
@@ -146,7 +169,9 @@ Hidden neurons forward a timing signal to the next layer:
 T_out[j] = p[j] · T_plus[j] + (1 − p[j]) · T_minus[j]
 ```
 
-This interpolates between the two races, keeping the signal differentiable for training purposes. Physically it is a voltage interpolation between two tapped delay lines.
+This is the **software training formula only** — it provides a differentiable, p-weighted blend whose value approaches min(T_plus[j], T_minus[j]) when the margin is large relative to τ_d.
+
+**Physically, the circuit always outputs the winner:** whichever sense amp fires first (positive or negative race) drives the next-layer delay cells; the other is masked.  When |margin| >> τ_d the formulas agree to high precision; near a tie (|margin| ~ τ_d) the software model is slightly smoother than the hardware.  The softmax output at the final layer uses the same formula, and the same argument applies — at inference time the hardware always makes a hard winner selection.
 
 ---
 
@@ -257,7 +282,7 @@ Each mini-batch update requires exactly **3 forward passes**:
 5. Update: u[i] -= η · (L+ − L−) / (2ε) · Δ[i]   for all i
 ```
 
-Gradient estimation noise is tamed by using mini-batches of 128 samples per pass. The 3-pass cost is **independent of the number of weights** — unlike backprop which scales with depth.
+Gradient estimation noise is tamed by using mini-batches of 128 samples per pass. The **per-step cost is independent of the number of weights** — always exactly 3 forward passes, unlike backprop which scales with depth.  However, the number of steps required to converge increases with network size: each SPSA step estimates the full gradient with a single scalar measurement, so per-step signal-to-noise per weight decreases as the parameter count grows.  For MNIST scale (2,410 weights), hardware-in-the-loop execution is the intended training mode — physical device measurements average across real hardware noise, and the P&V loop provides precise weight placement even with noisy gradient estimates.
 
 ### 9.2 Pulse-and-Verify (P&V) RRAM Programming
 
