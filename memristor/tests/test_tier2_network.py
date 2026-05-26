@@ -46,7 +46,7 @@ class TestTier2NetworkBasic:
         T = net.encode_binary(np.array([1.0, 0.0]))
         assert T[0] == pytest.approx(0.0)
 
-    def test_encode_binary_inactive_fires_at_T_inactive(self):
+    def test_encode_binary_inactive_fires_at_t_inactive(self):
         """Inactive input (x ≤ 0.5) → T = T_inactive_us."""
         net = Tier2Network(n_inputs=2, hidden_sizes=[2], n_outputs=1)
         T = net.encode_binary(np.array([1.0, 0.0]))
@@ -59,7 +59,7 @@ class TestTier2NetworkBasic:
             T = net.encode_binary(x)
             assert T[-1] == pytest.approx(0.0)
 
-    def test_T_inactive_scaled_from_ns(self):
+    def test_t_inactive_scaled_from_ns(self):
         """T_inactive_us = 1500 µs (= 150 ns × 10,000 scale factor)."""
         net = Tier2Network(n_inputs=2, hidden_sizes=[2], n_outputs=1)
         assert net.T_inactive_us == pytest.approx(1500.0, rel=1e-6)
@@ -168,13 +168,14 @@ class TestTier2NetworkBJTVerification:
     def test_bjt_hil_training_converges_on_xor(self):
         """Hardware-in-the-loop SPSA (BJT loss) finds XOR solution.
 
-        This is Route 2 from HARDWARE_SPEC.md §4.2: when τ_sense differs
-        from the training τ (due to BJT physics at d << d_nom), analytical
-        SPSA may find weights that fail on the physical circuit for XOR [1,1].
-        Training directly on the BJT forward pass bypasses this mismatch.
+        This is Route 2 from HARDWARE_SPEC.md §4.2: analytical SPSA may find
+        weights where τ_sense(d_min) differs enough from τ_training to cause
+        the BJT circuit to misclassify XOR [1,1].  Training with BJT loss and
+        an analytical warm-start adapts weights to the actual τ_sense so the
+        physical circuit classifies all four patterns correctly.
         """
         net = Tier2Network(n_inputs=2, hidden_sizes=[2], n_outputs=1, seed=0)
-        result = net.train_spsa_bjt(XOR_X, XOR_Y, n_epochs=3000, eta=0.05)
+        result = net.train_spsa_bjt(XOR_X, XOR_Y)  # warm-start + early-stop
         assert result["accuracy"] == pytest.approx(1.0), (
             f"BJT-HIL training did not converge: accuracy={result['accuracy']:.0%}"
         )
@@ -182,7 +183,7 @@ class TestTier2NetworkBJTVerification:
     def test_bjt_hil_all_patterns_correct(self):
         """After BJT-HIL training, all 4 XOR patterns pass BJT classification."""
         net = Tier2Network(n_inputs=2, hidden_sizes=[2], n_outputs=1, seed=0)
-        net.train_spsa_bjt(XOR_X, XOR_Y, n_epochs=3000, eta=0.05)
+        net.train_spsa_bjt(XOR_X, XOR_Y)  # warm-start + early-stop
         preds_bjt = net.predict_all_bjt(XOR_X)
         assert list(preds_bjt) == list(XOR_Y), (
             f"Expected {list(XOR_Y)}, got {list(preds_bjt)}"
@@ -198,7 +199,7 @@ class TestTier2NetworkBJTVerification:
         net.train_spsa(XOR_X, XOR_Y, n_epochs=3000, eta=0.05)
         easy_patterns = XOR_X[:3]   # [0,0], [0,1], [1,0] — not XOR [1,1]
         easy_labels = XOR_Y[:3]
-        for x, y in zip(easy_patterns, easy_labels):
+        for x, _y in zip(easy_patterns, easy_labels, strict=True):
             T_in = net.encode_binary(x)
             p_analytical = float(net.forward(T_in)[0])
             p_bjt = float(net.forward_bjt(T_in)[0])

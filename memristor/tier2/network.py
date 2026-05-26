@@ -31,7 +31,7 @@ KAPPA_US: float = math.sqrt(D_MIN_US * D_MAX_US)   # ≈ 158.1 µs geometric mea
 V_DD: float = 1.5            # V  (RC ramp supply)
 V_TH: float = V_DD / 2.0    # V  (BJT threshold = 50% crossing)
 V_T: float = 0.026           # V  (thermal voltage at 25 °C)
-GAIN_A: float = 35.0         # translinear mirror gain (≥35 ensures τ_sense(d_min) ≥ 0.6×τ_training)
+GAIN_A: float = 20.0         # translinear mirror gain; must be < V_th/(V_T·ln(N_max)) = 26.3
 TAU_US: float = 100.0        # µs nLSE temperature for SPSA training
 TAU_D_US: float = 50.0       # µs decision temperature
 T_INACTIVE_US: float = 1500.0  # µs silent-input time
@@ -348,19 +348,33 @@ class Tier2Network:
         self,
         X: np.ndarray,
         Y: np.ndarray,
-        n_epochs: int = 3000,
+        n_epochs: int = 2000,
         eta: float = 0.05,
         eps: float = 0.10,
+        n_warmup_epochs: int = 1000,
         batch_size: int | None = None,
         seed: int = 42,
     ) -> dict[str, object]:
         """Hardware-in-the-loop SPSA: loss evaluated with BJT forward pass.
 
-        Identical to train_spsa() but uses forward_bjt() for loss computation.
-        Training adapts weights to the actual BJT τ_sense distribution rather
-        than the fixed analytical τ_us — guaranteeing that the converged weights
-        work with the physical circuit regardless of τ_sense mismatch.
+        First runs n_warmup_epochs of fast analytical SPSA to land near a
+        valid solution, then fine-tunes with the BJT forward pass so weights
+        adapt to the actual τ_sense distribution.  Training stops as soon as
+        all patterns are correctly classified under the BJT model.
+
+        Returns
+        -------
+        dict with keys:
+            accuracy        – fraction correct under BJT evaluation
+            final_loss      – BJT cross-entropy after last epoch
+            converged_epoch – first BJT epoch with 100% BJT accuracy (or None)
         """
+        if n_warmup_epochs > 0:
+            self.train_spsa(
+                X, Y, n_epochs=n_warmup_epochs, eta=eta, eps=eps,
+                batch_size=batch_size, seed=seed,
+            )
+
         rng = np.random.default_rng(seed)
         n_samples = len(X)
         _batch = batch_size or n_samples
@@ -387,10 +401,10 @@ class Tier2Network:
             for layer in self.layers:
                 layer._clamp()
 
-            if converged_epoch is None:
-                preds = self.predict_all_bjt(X)
-                if np.all(preds == Y):
-                    converged_epoch = epoch
+            preds = self.predict_all_bjt(X)
+            if np.all(preds == Y):
+                converged_epoch = epoch
+                break
 
         preds = self.predict_all_bjt(X)
         accuracy = float(np.mean(preds == Y))

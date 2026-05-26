@@ -147,7 +147,7 @@ def main() -> None:
     print("  Training with forward_bjt() as the loss — weights adapt to actual τ_sense.")
     print()
     net_hil = Tier2Network(n_inputs=2, hidden_sizes=[2], n_outputs=1, seed=0)
-    result_hil = net_hil.train_spsa_bjt(XOR_X, XOR_Y, n_epochs=3000, eta=0.05)
+    result_hil = net_hil.train_spsa_bjt(XOR_X, XOR_Y)  # warm-start + early-stop
     print(f"  Converged at epoch: {result_hil['converged_epoch']}")
     print(f"  Final accuracy:     {result_hil['accuracy']:.0%}")
     print()
@@ -185,10 +185,10 @@ def main() -> None:
     print(f"  • Knowm SDC P&V: {successes}/{n_test} ({100*successes/n_test:.0f}%) targets "
           f"within ±5 µs in ≤100 pulses")
     print("  • BJT sense amp: multiplicity advance matches exact RC formula (not lin. approx)")
-    print("  • Analytical SPSA: XOR converges in ≤3000 epochs; BJT fails [1,1] at gain_A < 35")
-    print("  • HIL SPSA: weights adapt to actual τ_sense; all 4 XOR patterns correct in BJT")
-    print("  • Design recommendation: use HIL training, or increase gain_A ≥ 35 to ensure")
-    print("    τ_sense(d_min) ≥ 0.6×τ_training for d_min=50 µs")
+    print("  • Analytical SPSA: XOR converges in ≤3000 epochs; BJT may fail [1,1] at gain_A=20")
+    print("  • HIL SPSA (warm-start): analytical init + BJT fine-tune; all 4 patterns correct")
+    print("  • Design constraint: gain_A < V_th/(V_T·ln(N_max)) = 26.3 to avoid premature")
+    print("    BJT firing when all N_max inputs are simultaneously active")
 
 
 if __name__ == "__main__":

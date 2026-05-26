@@ -11,6 +11,6 @@ PCB parameters:
   d range    = 50–500 µs  (κ = 158 µs)
   V_DD_ramp  = 1.5 V
   V_th       = 0.75 V = V_DD/2
-  gain_A     = 35  →  τ_sense ≈ 192 µs; τ_sense(d_min) = 61 µs ≥ 0.6×τ_training
+  gain_A     = 20  →  τ_sense ≈ 110 µs; must be < 26.3 to avoid premature BJT firing
   T_inactive = 1500 µs
 """
