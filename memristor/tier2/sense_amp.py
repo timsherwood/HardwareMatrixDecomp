@@ -137,12 +137,17 @@ class BJTSenseAmp:
             0.0,
         )  # (N, T)
 
-        # Normalised log-current: log_I = (V_BE − V_th) / (gain_A × V_T)
-        # Clipped to avoid overflow (exp argument bounded ≈ ±5 at nominal params)
-        log_I = np.clip(
-            (V_BE - self.V_th) / (self.gain_A * self.V_T),
+        # Normalised log-current: log_I = (V_BE − V_th) / (gain_A × V_T).
+        # Branches that have not yet arrived (dt ≤ 0) are modelled as completely
+        # off (active-pulldown reset holds V_BE << V_th before T_in_i).
+        log_I = np.where(
+            dt_grid > 0.0,
+            np.clip(
+                (V_BE - self.V_th) / (self.gain_A * self.V_T),
+                -50.0,
+                50.0,
+            ),
             -50.0,
-            50.0,
         )  # (N, T)
 
         # log(I_total) = log Σ_i exp(log_I_i) — use logsumexp for stability

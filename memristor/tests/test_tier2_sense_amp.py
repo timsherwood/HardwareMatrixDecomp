@@ -44,7 +44,7 @@ class TestNLSEHelper:
         t, tau = 100.0, 10.0
         assert nLSE_us([t, t], tau) == pytest.approx(t - tau * math.log(2), rel=1e-6)
 
-    def test_nLSE_le_min(self):
+    def test_nlse_le_min(self):
         """nLSE ≤ min(t_cross_i) for any inputs."""
         tcs = [50.0, 80.0, 120.0]
         tau = 15.0
@@ -98,7 +98,7 @@ class TestBJTSenseAmpFiring:
         fire_2 = amp.fire_time_us([D_NOM_US, D_NOM_US], [0.0, 0.0])
         assert fire_2 < fire_1
 
-    def test_multiplicity_advance_approx_tau_ln_N(self):
+    def test_multiplicity_advance_approx_tau_ln_n(self):
         """Advance for N simultaneous branches matches exact BJT formula.
 
         Exact (from RC ramp inversion):
@@ -144,7 +144,7 @@ class TestBJTSenseAmpFiring:
 
 
 class TestBJTSenseAmpNLSEApproximation:
-    def test_fire_time_approximates_nLSE(self):
+    def test_fire_time_approximates_nlse(self):
         """BJT fire time ≈ nLSE(t_cross_i; τ_sense) for different branch configs."""
         amp = BJTSenseAmp(V_DD=V_DD, V_th=V_TH, V_T=V_T, gain_A=GAIN_A, dt_us=0.1)
 
@@ -157,7 +157,7 @@ class TestBJTSenseAmpNLSEApproximation:
         for delays, T_ins in cases:
             t_crosses = [
                 T + d * math.log(V_DD / (V_DD - V_TH))
-                for d, T in zip(delays, T_ins)
+                for d, T in zip(delays, T_ins, strict=True)
             ]
             # Use average τ_sense for the analytical nLSE estimate
             tau_avg = float(np.mean([_tau_s(d) for d in delays]))
@@ -171,7 +171,7 @@ class TestBJTSenseAmpNLSEApproximation:
 
 
 class TestMarginCancellation:
-    def test_C_offset_cancels_in_margin(self):
+    def test_c_offset_cancels_in_margin(self):
         """Circuit offset C cancels in margin: margin = nLSE_neg − nLSE_pos."""
         tau = 50.0  # µs — representative τ_sense
         # Positive race: one fast branch

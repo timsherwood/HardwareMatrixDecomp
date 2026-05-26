@@ -22,9 +22,9 @@ class TestKnowmSDCBasic:
     def test_nominal_resistance_set_correctly(self):
         """R=R_NOM is stored exactly."""
         dev = KnowmSDC(R=R_NOM)
-        assert dev.R == pytest.approx(R_NOM)
+        assert pytest.approx(R_NOM) == dev.R
 
-    def test_delay_us_equals_R_times_C(self):
+    def test_delay_us_equals_r_times_c(self):
         """delay_us = R × C_cell × 1e6."""
         dev = KnowmSDC(R=R_NOM)
         expected_us = R_NOM * C_CELL_F * 1e6
@@ -95,7 +95,6 @@ class TestKnowmSDCSwitching:
         """SET from R_NOM then RESET returns close to R_NOM (zero noise)."""
         dev = KnowmSDC(R=R_NOM, noise_frac=0.0)
         dev.set_pulse(rng=np.random.default_rng(0))
-        R_after_set = dev.R
         dev.reset_pulse(rng=np.random.default_rng(0))
         # Should be back near R_NOM (within one step of variability)
         assert abs(dev.R - R_NOM) < R_NOM * 0.15

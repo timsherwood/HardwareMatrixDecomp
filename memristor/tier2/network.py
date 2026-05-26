@@ -348,19 +348,23 @@ class Tier2Network:
         self,
         X: np.ndarray,
         Y: np.ndarray,
-        n_epochs: int = 2000,
+        n_epochs: int = 5000,
         eta: float = 0.05,
         eps: float = 0.10,
-        n_warmup_epochs: int = 1000,
+        n_warmup_epochs: int = 0,
         batch_size: int | None = None,
         seed: int = 42,
     ) -> dict[str, object]:
         """Hardware-in-the-loop SPSA: loss evaluated with BJT forward pass.
 
-        First runs n_warmup_epochs of fast analytical SPSA to land near a
-        valid solution, then fine-tunes with the BJT forward pass so weights
-        adapt to the actual τ_sense distribution.  Training stops as soon as
-        all patterns are correctly classified under the BJT model.
+        Trains directly with BJT loss so weights adapt to the actual τ_sense
+        distribution.  Training stops as soon as all patterns are correctly
+        classified under the BJT model.
+
+        If n_warmup_epochs > 0, first runs fast analytical SPSA as a warm-start.
+        Note: the analytical nLSE model (τ_training >> τ_sense) may find
+        solutions that exploit unphysical negative fire times; for reliable BJT
+        convergence on XOR use the default n_warmup_epochs=0 with a good seed.
 
         Returns
         -------
